@@ -118,6 +118,7 @@ def combine_all_data():
     return df_master
 
 if __name__ == "__main__":
+    # scrape all platforms
     df_amazon_ae = scrape_amazon_ae()
     df_amazon_ae.to_csv('data/amazon_ae_auto.csv', index=False)
     print("Amazon.ae saved!")
@@ -126,4 +127,13 @@ if __name__ == "__main__":
     df_amazon_in.to_csv('data/amazon_in_auto.csv', index=False)
     print("Amazon.in saved!")
 
+    # combine all data
     combine_all_data()
+
+    # auto push to github
+    import subprocess
+    subprocess.run(['git', 'add', '.'], cwd='/home/syedtaha/shawl-business-intelligence')
+    subprocess.run(['git', 'commit', '-m', f'Auto update: {datetime.now().strftime("%Y-%m-%d")}'],
+                   cwd='/home/syedtaha/shawl-business-intelligence')
+    subprocess.run(['git', 'push'], cwd='/home/syedtaha/shawl-business-intelligence')
+    print("GitHub updated!")
