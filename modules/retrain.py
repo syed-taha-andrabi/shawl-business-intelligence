@@ -8,73 +8,148 @@ from datetime import datetime
 
 print(f"Retraining started: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-# load master dataset
 df = pd.read_csv('data/master_dataset.csv')
-df = df.dropna(subset=['price'])
+df = df.dropna(subset=['price', 'title'])
 
-print(f"Total products for training: {len(df)}")
+print(f"Total products: {len(df)}")
+print(df['source'].value_counts())
 
-# feature engineering
-df['title_length'] = df['title'].str.len()
-df['has_embroidered'] = df['title'].str.lower().str.contains('embroidered').astype(int)
-df['has_kani'] = df['title'].str.lower().str.contains('kani').astype(int)
-df['has_luxury'] = df['title'].str.lower().str.contains('luxury').astype(int)
-df['has_handmade'] = df['title'].str.lower().str.contains('handmade').astype(int)
-df['has_authentic'] = df['title'].str.lower().str.contains('authentic').astype(int)
-df['is_etsy'] = (df['source'] == 'Etsy').astype(int)
-df['is_india'] = (df['market'] == 'India').astype(int)
+def engineer_features(df):
+    df = df.copy()
+    df['title_length'] = df['title'].str.len()
+    df['has_embroidered'] = df['title'].str.lower().str.contains('embroidered').astype(int)
+    df['has_kani'] = df['title'].str.lower().str.contains('kani').astype(int)
+    df['has_sozni'] = df['title'].str.lower().str.contains('sozni').astype(int)
+    df['has_jamawar'] = df['title'].str.lower().str.contains('jamawar').astype(int)
+    df['has_luxury'] = df['title'].str.lower().str.contains('luxury').astype(int)
+    df['has_handmade'] = df['title'].str.lower().str.contains('handmade').astype(int)
+    df['has_authentic'] = df['title'].str.lower().str.contains('authentic').astype(int)
+    df['has_cashmere'] = df['title'].str.lower().str.contains('cashmere').astype(int)
+    df['has_wool'] = df['title'].str.lower().str.contains('wool').astype(int)
+    df['has_pashmina'] = df['title'].str.lower().str.contains('pashmina').astype(int)
+    return df
 
-features = ['title_length', 'has_embroidered', 'has_kani', 'has_luxury',
-            'has_handmade', 'has_authentic', 'is_etsy', 'is_india']
+features = [
+    'title_length', 'has_embroidered', 'has_kani', 'has_sozni',
+    'has_jamawar', 'has_luxury', 'has_handmade', 'has_authentic',
+    'has_cashmere', 'has_wool', 'has_pashmina'
+]
 
-# ===== RETRAIN PRICE MODEL =====
-print("\nRetraining price model...")
-X = df[features]
-y = df['price']
+def train_price_model(df_market, market_name):
+    print(f"\nTraining price model for {market_name}...")
+    df_market = engineer_features(df_market)
+    
+    if len(df_market) < 30:
+        print(f"Not enough data for {market_name} — skipping")
+        return
+    
+    X = df_market[features]
+    y = df_market['price']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    mae = mean_absolute_error(y_test, model.predict(X_test))
+    r2 = r2_score(y_test, model.predict(X_test))
+    print(f"{market_name} Price Model — MAE: {mae:.0f}, R2: {r2:.3f}, Products: {len(df_market)}")
+    
+    model_name = market_name.lower().replace('.', '_').replace(' ', '_')
+    with open(f'models/price_model_{model_name}.pkl', 'wb') as f:
+        pickle.dump(model, f)
+    with open(f'models/price_features_{model_name}.pkl', 'wb') as f:
+        pickle.dump(features, f)
+    
+    print(f"Saved: price_model_{model_name}.pkl")
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-price_model = RandomForestRegressor(n_estimators=100, random_state=42)
-price_model.fit(X_train, y_train)
+def train_success_model(df_market, market_name):
+    print(f"\nTraining success model for {market_name}...")
+    df_market = engineer_features(df_market)
+    
+    if 'rating' not in df_market.columns:
+        print(f"No rating data for {market_name} — skipping")
+        return
+    
+    df_market = df_market.dropna(subset=['rating'])
+    
+    if len(df_market) < 30:
+        print(f"Not enough data for {market_name} — skipping")
+        return
+    
+    df_market['success'] = (df_market['rating'] >= 4.7).astype(int)
+    
+    X = df_market[features]
+    y = df_market['success']
+    
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    acc = accuracy_score(y_test, model.predict(X_test))
+    print(f"{market_name} Success Model — Accuracy: {acc:.2f}, Products: {len(df_market)}")
+    
+    model_name = market_name.lower().replace('.', '_').replace(' ', '_')
+    with open(f'models/success_model_{model_name}.pkl', 'wb') as f:
+        pickle.dump(model, f)
+    with open(f'models/success_features_{model_name}.pkl', 'wb') as f:
+        pickle.dump(features, f)
+    
+    print(f"Saved: success_model_{model_name}.pkl")
 
-mae = mean_absolute_error(y_test, price_model.predict(X_test))
-r2 = r2_score(y_test, price_model.predict(X_test))
-print(f"Price Model — MAE: {mae:.0f}, R2: {r2:.3f}")
+def train_classifier_model(df_market, market_name):
+    print(f"\nTraining category classifier for {market_name}...")
+    df_market = engineer_features(df_market)
+    
+    if len(df_market) < 30:
+        print(f"Not enough data for {market_name} — skipping")
+        return
 
-with open('models/price_model.pkl', 'wb') as f:
-    pickle.dump(price_model, f)
-with open('models/price_features.pkl', 'wb') as f:
-    pickle.dump(features, f)
+    # define price categories per market
+    if market_name == 'Amazon.ae':
+        bins = [0, 50, 100, 200, float('inf')]
+    elif market_name == 'Amazon.in':
+        bins = [0, 1000, 5000, 15000, float('inf')]
+    else:
+        bins = [0, 8000, 25000, 80000, float('inf')]
 
-# ===== RETRAIN SUCCESS MODEL =====
-print("\nRetraining success model...")
-df_etsy = pd.read_csv('data/etsy_clean.csv')
-df_etsy = df_etsy.dropna(subset=['sale_price', 'rating'])
-df_etsy['success'] = (df_etsy['rating'] >= 4.7).astype(int)
-df_etsy['title_length'] = df_etsy['title'].str.len()
-df_etsy['has_embroidered'] = df_etsy['title'].str.lower().str.contains('embroidered').astype(int)
-df_etsy['has_kani'] = df_etsy['title'].str.lower().str.contains('kani').astype(int)
-df_etsy['has_luxury'] = df_etsy['title'].str.lower().str.contains('luxury').astype(int)
-df_etsy['has_handmade'] = df_etsy['title'].str.lower().str.contains('handmade').astype(int)
-df_etsy['has_authentic'] = df_etsy['title'].str.lower().str.contains('authentic').astype(int)
-df_etsy['discount_pct'] = df_etsy['discount'].str.replace('(','').str.replace('% off)','').str.strip()
-df_etsy['discount_pct'] = pd.to_numeric(df_etsy['discount_pct'], errors='coerce').fillna(0)
+    labels = ['Budget', 'Mid-range', 'Premium', 'Luxury']
+    df_market['category'] = pd.cut(df_market['price'], bins=bins, labels=labels)
+    df_market = df_market.dropna(subset=['category'])
 
-success_features = ['sale_price', 'title_length', 'has_embroidered', 'has_kani',
-                    'has_luxury', 'has_handmade', 'has_authentic', 'discount_pct']
+    if len(df_market) < 30:
+        print(f"Not enough category data for {market_name} — skipping")
+        return
 
-X_s = df_etsy[success_features]
-y_s = df_etsy['success']
+    X = df_market[features]
+    y = df_market['category']
 
-X_train_s, X_test_s, y_train_s, y_test_s = train_test_split(X_s, y_s, test_size=0.2, random_state=42)
-success_model = RandomForestClassifier(n_estimators=100, random_state=42)
-success_model.fit(X_train_s, y_train_s)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-acc = accuracy_score(y_test_s, success_model.predict(X_test_s))
-print(f"Success Model — Accuracy: {acc:.2f}")
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
 
-with open('models/success_model.pkl', 'wb') as f:
-    pickle.dump(success_model, f)
-with open('models/success_features.pkl', 'wb') as f:
-    pickle.dump(success_features, f)
+    acc = accuracy_score(y_test, model.predict(X_test))
+    print(f"{market_name} Classifier — Accuracy: {acc:.2f}, Products: {len(df_market)}")
 
-print(f"\nAll models retrained and saved: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    model_name = market_name.lower().replace('.', '_').replace(' ', '_')
+    with open(f'models/classifier_model_{model_name}.pkl', 'wb') as f:
+        pickle.dump(model, f)
+    with open(f'models/classifier_features_{model_name}.pkl', 'wb') as f:
+        pickle.dump(features, f)
+
+    print(f"Saved: classifier_model_{model_name}.pkl")
+
+# train separate models for each market
+for source in df['source'].unique():
+    df_market = df[df['source'] == source].copy()
+    train_price_model(df_market, source)
+    train_success_model(df_market, source)
+    train_classifier_model(df_market, source)
+
+print(f"\nAll models retrained: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+print("\nModels saved:")
+import os
+for f in os.listdir('models/'):
+    print(f"  {f}")
