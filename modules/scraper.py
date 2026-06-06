@@ -4,6 +4,16 @@ import pandas as pd
 import time
 from datetime import datetime
 
+KEYWORDS = [
+    'kashmiri pashmina shawl',
+    'kani shawl',
+    'sozni shawl',
+    'jamawar shawl',
+    'cashmere shawl',
+    'embroidered shawl kashmiri',
+    'wool shawl kashmir'
+]
+
 def get_driver():
     options = uc.ChromeOptions()
     options.add_argument('--headless')
@@ -17,39 +27,41 @@ def scrape_amazon_ae():
     driver = get_driver()
     all_products = []
 
-    for page in range(1, 4):
-        url = f"https://www.amazon.ae/s?k=kashmiri+pashmina+shawl&page={page}"
-        driver.get(url)
-        time.sleep(4)
+    for keyword in KEYWORDS:
+        print(f"  Searching: {keyword}")
+        for page in range(1, 4):
+            url = f"https://www.amazon.ae/s?k={keyword.replace(' ', '+')}&page={page}"
+            driver.get(url)
+            time.sleep(4)
 
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        listings = soup.find_all('div', {'data-component-type': 's-search-result'})
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            listings = soup.find_all('div', {'data-component-type': 's-search-result'})
 
-        for item in listings:
-            try:
-                brand = item.find('span', class_='a-size-base-plus')
-                title = item.find('span', attrs={'class': None})
-                price = item.find('span', class_='a-price-whole')
+            for item in listings:
+                try:
+                    brand = item.find('span', class_='a-size-base-plus')
+                    title = item.find('span', attrs={'class': None})
+                    price = item.find('span', class_='a-price-whole')
 
-                if price:
-                    all_products.append({
-                        'brand': brand.text.strip() if brand else None,
-                        'title': title.text.strip() if title else None,
-                        'price': float(price.text.replace(',', '').replace('.', '').strip()),
-                        'source': 'Amazon.ae',
-                        'market': 'UAE',
-                        'scraped_date': datetime.now().strftime('%Y-%m-%d')
-                    })
-            except:
-                continue
+                    if price:
+                        all_products.append({
+                            'brand': brand.text.strip() if brand else None,
+                            'title': title.text.strip() if title else None,
+                            'price': float(price.text.replace(',', '').replace('.', '').strip()),
+                            'source': 'Amazon.ae',
+                            'market': 'UAE',
+                            'keyword': keyword,
+                            'scraped_date': datetime.now().strftime('%Y-%m-%d')
+                        })
+                except:
+                    continue
 
-        print(f"Page {page} done - {len(all_products)} products so far")
-        time.sleep(3)
+            time.sleep(3)
+        print(f"  Total so far: {len(all_products)}")
 
     driver.quit()
-    df = pd.DataFrame(all_products)
-    print(f"Total scraped: {len(df)}")
-    print(df.head())
+    df = pd.DataFrame(all_products).drop_duplicates(subset=['title', 'price'])
+    print(f"Amazon.ae unique products: {len(df)}")
     return df
 
 def scrape_amazon_in():
@@ -57,39 +69,41 @@ def scrape_amazon_in():
     driver = get_driver()
     all_products = []
 
-    for page in range(1, 4):
-        url = f"https://www.amazon.in/s?k=kashmiri+pashmina+shawl&page={page}"
-        driver.get(url)
-        time.sleep(4)
+    for keyword in KEYWORDS:
+        print(f"  Searching: {keyword}")
+        for page in range(1, 4):
+            url = f"https://www.amazon.in/s?k={keyword.replace(' ', '+')}&page={page}"
+            driver.get(url)
+            time.sleep(4)
 
-        soup = BeautifulSoup(driver.page_source, 'html.parser')
-        listings = soup.find_all('div', {'data-component-type': 's-search-result'})
+            soup = BeautifulSoup(driver.page_source, 'html.parser')
+            listings = soup.find_all('div', {'data-component-type': 's-search-result'})
 
-        for item in listings:
-            try:
-                brand = item.find('span', class_='a-size-base-plus')
-                title = item.find('span', attrs={'class': None})
-                price = item.find('span', class_='a-price-whole')
+            for item in listings:
+                try:
+                    brand = item.find('span', class_='a-size-base-plus')
+                    title = item.find('span', attrs={'class': None})
+                    price = item.find('span', class_='a-price-whole')
 
-                if price:
-                    all_products.append({
-                        'brand': brand.text.strip() if brand else None,
-                        'title': title.text.strip() if title else None,
-                        'price': float(price.text.replace(',', '').replace('.', '').strip()),
-                        'source': 'Amazon.in',
-                        'market': 'India',
-                        'scraped_date': datetime.now().strftime('%Y-%m-%d')
-                    })
-            except:
-                continue
+                    if price:
+                        all_products.append({
+                            'brand': brand.text.strip() if brand else None,
+                            'title': title.text.strip() if title else None,
+                            'price': float(price.text.replace(',', '').replace('.', '').strip()),
+                            'source': 'Amazon.in',
+                            'market': 'India',
+                            'keyword': keyword,
+                            'scraped_date': datetime.now().strftime('%Y-%m-%d')
+                        })
+                except:
+                    continue
 
-        print(f"Page {page} done - {len(all_products)} products so far")
-        time.sleep(3)
+            time.sleep(3)
+        print(f"  Total so far: {len(all_products)}")
 
     driver.quit()
-    df = pd.DataFrame(all_products)
-    print(f"Total scraped: {len(df)}")
-    print(df.head())
+    df = pd.DataFrame(all_products).drop_duplicates(subset=['title', 'price'])
+    print(f"Amazon.in unique products: {len(df)}")
     return df
 
 def combine_all_data():
@@ -101,10 +115,11 @@ def combine_all_data():
 
     df_etsy['source'] = 'Etsy'
     df_etsy['market'] = 'Global'
+    df_etsy['keyword'] = 'kashmiri pashmina shawl'
     df_etsy['scraped_date'] = datetime.now().strftime('%Y-%m-%d')
     df_etsy = df_etsy.rename(columns={'sale_price': 'price', 'shop': 'brand'})
 
-    cols = ['brand', 'title', 'price', 'source', 'market', 'scraped_date']
+    cols = ['brand', 'title', 'price', 'source', 'market', 'keyword', 'scraped_date']
 
     df_master = pd.concat([
         df_ae[cols],
@@ -118,7 +133,6 @@ def combine_all_data():
     return df_master
 
 if __name__ == "__main__":
-    # scrape all platforms
     df_amazon_ae = scrape_amazon_ae()
     df_amazon_ae.to_csv('data/amazon_ae_auto.csv', index=False)
     print("Amazon.ae saved!")
@@ -127,10 +141,8 @@ if __name__ == "__main__":
     df_amazon_in.to_csv('data/amazon_in_auto.csv', index=False)
     print("Amazon.in saved!")
 
-    # combine all data
     combine_all_data()
 
-    # auto push to github
     import subprocess
     subprocess.run(['git', 'add', '.'], cwd='/home/syedtaha/shawl-business-intelligence')
     subprocess.run(['git', 'commit', '-m', f'Auto update: {datetime.now().strftime("%Y-%m-%d")}'],
