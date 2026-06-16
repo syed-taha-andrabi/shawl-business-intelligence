@@ -408,6 +408,18 @@ elif page == "🔍 Product Analyzer":
     st.title("🔍 Product Analyzer")
     st.caption("Benchmark your product against any competitor's market data")
 
+    # keywords that must appear for a title to count as a shawl product
+    SHAWL_CORE = {
+        'shawl', 'stole', 'pashmina', 'cashmere', 'wrap', 'scarf',
+        'kani', 'sozni', 'jamawar', 'kashmiri', 'kashmir',
+        'aari', 'tilla', 'dorukha', 'wool', 'dupatta'
+    }
+    # keywords that boost confidence (nice-to-have, not required)
+    SHAWL_QUALITY = {
+        'embroidered', 'handmade', 'handwoven', 'authentic', 'luxury',
+        'pure', 'reversible', 'printed', 'plain', 'hashida'
+    }
+
     col_input, col_result = st.columns([1, 1])
 
     with col_input:
@@ -419,44 +431,72 @@ elif page == "🔍 Product Analyzer":
         your_price = st.number_input("Your Price (₹)", min_value=0, value=15000, step=500)
         analyze = st.button("Analyze", use_container_width=True)
 
-    if analyze and title:
-        # load this competitor's models
-        slug = market.lower().replace('.', '_').replace(' ', '_')
-        price_model_path      = os.path.join(MODELS_DIR, f'price_model_{slug}.pkl')
-        price_features_path   = os.path.join(MODELS_DIR, f'price_features_{slug}.pkl')
-        class_model_path      = os.path.join(MODELS_DIR, f'classifier_model_{slug}.pkl')
-        class_features_path   = os.path.join(MODELS_DIR, f'classifier_features_{slug}.pkl')
+    if analyze and not title:
+        with col_result:
+            st.error("Please enter a product title.")
 
-        models_ok = all(os.path.exists(p) for p in [
-            price_model_path, price_features_path, class_model_path, class_features_path
-        ])
-
-        # build feature vector
+    elif analyze and title:
         t = title.lower()
-        features = {
-            'title_length':    len(title),
-            'has_embroidered': int('embroidered' in t),
-            'has_kani':        int('kani' in t),
-            'has_sozni':       int('sozni' in t),
-            'has_jamawar':     int('jamawar' in t),
-            'has_luxury':      int('luxury' in t),
-            'has_handmade':    int('handmade' in t),
-            'has_authentic':   int('authentic' in t),
-            'has_cashmere':    int('cashmere' in t),
-            'has_wool':        int('wool' in t),
-            'has_pashmina':    int('pashmina' in t),
-        }
+
+        # ── shawl validation ─────────────────────────────────────────────────
+        core_hits    = [k for k in SHAWL_CORE    if k in t]
+        quality_hits = [k for k in SHAWL_QUALITY if k in t]
+        confidence   = len(core_hits) * 2 + len(quality_hits)  # weighted score
 
         with col_result:
+            if not core_hits:
+                st.error(
+                    "**This doesn't look like a shawl/pashmina product.**\n\n"
+                    "The title must contain at least one of: "
+                    + ", ".join(sorted(SHAWL_CORE))
+                )
+                st.stop()
+
+            # confidence badge
+            if confidence >= 4:
+                badge_color, badge_text = '#55A868', f'High confidence ({confidence}/10)'
+            elif confidence >= 2:
+                badge_color, badge_text = '#DD8452', f'Medium confidence ({confidence}/10)'
+            else:
+                badge_color, badge_text = '#8172B3', f'Low confidence ({confidence}/10) — add more keywords'
+
+            st.markdown(
+                f"<div style='background:{badge_color};color:white;padding:6px 12px;"
+                f"border-radius:6px;display:inline-block;margin-bottom:12px'>"
+                f"Shawl confidence: {badge_text}</div>",
+                unsafe_allow_html=True
+            )
+
+            # ── load models ──────────────────────────────────────────────────
+            slug = market.lower().replace('.', '_').replace(' ', '_')
+            price_model_path    = os.path.join(MODELS_DIR, f'price_model_{slug}.pkl')
+            price_features_path = os.path.join(MODELS_DIR, f'price_features_{slug}.pkl')
+            class_model_path    = os.path.join(MODELS_DIR, f'classifier_model_{slug}.pkl')
+            class_features_path = os.path.join(MODELS_DIR, f'classifier_features_{slug}.pkl')
+
+            models_ok = all(os.path.exists(p) for p in [
+                price_model_path, price_features_path, class_model_path, class_features_path
+            ])
+
+            features = {
+                'title_length':    len(title),
+                'has_embroidered': int('embroidered' in t),
+                'has_kani':        int('kani' in t),
+                'has_sozni':       int('sozni' in t),
+                'has_jamawar':     int('jamawar' in t),
+                'has_luxury':      int('luxury' in t),
+                'has_handmade':    int('handmade' in t or 'handwoven' in t),
+                'has_authentic':   int('authentic' in t),
+                'has_cashmere':    int('cashmere' in t),
+                'has_wool':        int('wool' in t),
+                'has_pashmina':    int('pashmina' in t),
+            }
+
             if models_ok:
-                with open(price_model_path, 'rb') as f:
-                    pm = pickle.load(f)
-                with open(price_features_path, 'rb') as f:
-                    pf = pickle.load(f)
-                with open(class_model_path, 'rb') as f:
-                    cm = pickle.load(f)
-                with open(class_features_path, 'rb') as f:
-                    cf = pickle.load(f)
+                with open(price_model_path, 'rb') as f:    pm = pickle.load(f)
+                with open(price_features_path, 'rb') as f: pf = pickle.load(f)
+                with open(class_model_path, 'rb') as f:    cm = pickle.load(f)
+                with open(class_features_path, 'rb') as f: cf = pickle.load(f)
 
                 X_price = pd.DataFrame([[features[k] for k in pf]], columns=pf)
                 X_class = pd.DataFrame([[features[k] for k in cf]], columns=cf)
@@ -464,55 +504,67 @@ elif page == "🔍 Product Analyzer":
                 suggested_price = pm.predict(X_price)[0]
                 category = cm.predict(X_class)[0]
 
-                st.subheader("Results")
+                st.subheader("Price Estimate")
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Suggested Price", fmt_price(suggested_price))
+                m1.metric("Model Estimate",  fmt_price(suggested_price))
                 m2.metric("Your Price",      fmt_price(your_price))
                 delta = your_price - suggested_price
-                m3.metric("Difference", fmt_price(abs(delta)),
-                          delta=f"{'over' if delta > 0 else 'under'} market",
+                m3.metric("vs Model",        fmt_price(abs(delta)),
+                          delta=f"{'over' if delta > 0 else 'under'} estimate",
                           delta_color="inverse")
+                st.caption(f"Category: **{category}** — trained on {market} product prices")
 
-                st.info(f"**Price Category:** {category} (based on {market} market)")
+            # ── actual market data for matching keywords ───────────────────
+            df_m = df[df['source'] == market].copy()
 
-            # competitor stats for context
-            df_m = df[df['source'] == market]
+            # filter competitor products to those sharing ≥1 core keyword
+            mask = df_m['title'].str.lower().apply(
+                lambda x: any(k in x for k in core_hits)
+            )
+            df_similar = df_m[mask]
+
             st.divider()
-            st.subheader(f"{market} Market Context")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Avg Price",    fmt_price(df_m['price'].mean()))
-            c2.metric("Median Price", fmt_price(df_m['price'].median()))
-            c3.metric("Products",     f"{len(df_m):,}")
+            st.subheader(f"Similar Products in {market}")
+            c1, c2, c3, c4 = st.columns(4)
+            if not df_similar.empty:
+                c1.metric("Matched Products", f"{len(df_similar):,}")
+                c2.metric("Avg Price",         fmt_price(df_similar['price'].mean()))
+                c3.metric("Lowest",            fmt_price(df_similar['price'].min()))
+                c4.metric("Highest",           fmt_price(df_similar['price'].max()))
 
-            # where your price sits in that market
-            pct = (df_m['price'] < your_price).mean() * 100
-            st.write(f"Your price of **{fmt_price(your_price)}** is higher than "
-                     f"**{pct:.0f}%** of {market}'s products.")
+                pct = (df_similar['price'] < your_price).mean() * 100
+                st.write(
+                    f"Your price **{fmt_price(your_price)}** is higher than "
+                    f"**{pct:.0f}%** of similar products on {market}."
+                )
+                st.dataframe(
+                    df_similar[['title', 'price']].sort_values('price', ascending=False).head(10),
+                    use_container_width=True, hide_index=True
+                )
+            else:
+                c1.metric("Matched Products", "0")
+                st.info(f"No products with these keywords found on {market}.")
 
-            # keyword analysis
+            # ── keyword analysis ──────────────────────────────────────────
             st.divider()
-            st.subheader("Keyword Analysis")
-            found    = [k for k in SHAWL_KEYWORDS if k in t]
-            missing  = [k for k in ['pashmina','kani','sozni','embroidered',
-                                     'cashmere','handmade','authentic','kashmiri']
-                        if k not in t]
+            st.subheader("Keyword Breakdown")
 
-            if found:
-                st.success(f"✅ Strong keywords found: **{', '.join(found)}**")
-            if missing:
-                st.warning(f"⚠️ Consider adding: **{', '.join(missing)}**")
+            all_hits = core_hits + quality_hits
+            missing_core    = [k for k in ['pashmina','kani','sozni','embroidered',
+                                            'cashmere','handmade','kashmiri','shawl']
+                               if k not in t]
 
-            # how common are these keywords in competitor titles
-            kw_mkt = extract_keywords(df_m['title'])
+            if all_hits:
+                st.success(f"Found: **{', '.join(all_hits)}**")
+            if missing_core:
+                st.warning(f"Consider adding: **{', '.join(missing_core)}**")
+
+            kw_mkt    = extract_keywords(df_m['title'])
             total_mkt = len(df_m)
-            if found:
-                st.subheader("Your Keywords vs Competitor Usage")
+            if all_hits:
                 kw_compare = pd.DataFrame(
                     [(k, kw_mkt.get(k, 0), round(kw_mkt.get(k, 0)/total_mkt*100, 1))
-                     for k in found],
-                    columns=['keyword', 'count', 'pct_of_market']
-                ).sort_values('pct_of_market', ascending=False)
+                     for k in all_hits],
+                    columns=['keyword', 'count', '% of competitor titles']
+                ).sort_values('% of competitor titles', ascending=False)
                 st.dataframe(kw_compare, use_container_width=True, hide_index=True)
-
-    elif analyze and not title:
-        st.warning("Please enter a product title.")
