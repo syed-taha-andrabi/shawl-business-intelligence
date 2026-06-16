@@ -78,12 +78,17 @@ def scrape_shopify(site):
                 price = variant.get('price')
                 original_price = variant.get('compare_at_price')
 
+                image_url = None
+                if p.get('images'):
+                    image_url = p['images'][0].get('src')
+
                 products.append({
                     'brand':          p.get('vendor', name),
                     'title':          title,
                     'price':          float(price) if price else None,
                     'original_price': float(original_price) if original_price else None,
                     'product_type':   product_type,
+                    'image_url':      image_url,
                     'source':         name,
                     'market':         market,
                     'scraped_date':   datetime.now().strftime('%Y-%m-%d'),
@@ -116,11 +121,12 @@ def _get_kcsshop_product(url):
         if not is_shawl(title):
             return None
 
-        # current price (sale or regular)
         price_el = soup.select_one('.price ins .woocommerce-Price-amount bdi, '
                                    '.price > .woocommerce-Price-amount bdi, '
                                    '.price .amount bdi')
         orig_el = soup.select_one('.price del .woocommerce-Price-amount bdi')
+        img_el = soup.select_one('.woocommerce-product-gallery__image img, '
+                                 '.wp-post-image, figure.woocommerce-product-gallery__wrapper img')
 
         def parse_price(el):
             if not el:
@@ -131,6 +137,7 @@ def _get_kcsshop_product(url):
 
         price = parse_price(price_el)
         original_price = parse_price(orig_el)
+        image_url = img_el.get('data-large_image') or img_el.get('src') if img_el else None
 
         if price is None:
             return None
@@ -141,6 +148,7 @@ def _get_kcsshop_product(url):
             'price':          price,
             'original_price': original_price,
             'product_type':   'Shawl',
+            'image_url':      image_url,
             'source':         'KCS Shop',
             'market':         'India',
             'scraped_date':   datetime.now().strftime('%Y-%m-%d'),
@@ -234,8 +242,10 @@ def scrape_pashmina_com():
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 title_links = soup.select('h3 a[href]')
                 price_spans = soup.select('p.float-left span, .price-display span')
+                # image is the sibling <a> wrapping the <img> near each product card
+                img_tags = soup.select('div.group img, [class*=product] img')
 
-                for link, price_el in zip(title_links, price_spans):
+                for i, (link, price_el) in enumerate(zip(title_links, price_spans)):
                     try:
                         title_p = link.find('p')
                         title = (title_p.get_text(strip=True) if title_p
@@ -251,12 +261,15 @@ def scrape_pashmina_com():
                         if price is None:
                             continue
 
+                        image_url = img_tags[i].get('src') if i < len(img_tags) else None
+
                         products.append({
                             'brand':          'Pashmina.com',
                             'title':          title,
                             'price':          price,
                             'original_price': None,
                             'product_type':   'Pashmina',
+                            'image_url':      image_url,
                             'source':         'Pashmina.com',
                             'market':         'Global',
                             'scraped_date':   datetime.now().strftime('%Y-%m-%d'),
