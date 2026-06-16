@@ -1,151 +1,317 @@
-import undetected_chromedriver as uc
+import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
-KEYWORDS = [
-    'kashmiri pashmina shawl',
-    'kani shawl',
-    'sozni shawl',
-    'jamawar shawl',
-    'cashmere shawl',
-    'embroidered shawl kashmiri',
-    'wool shawl kashmir'
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+}
+
+SHAWL_INCLUDE = [
+    'shawl', 'stole', 'pashmina', 'wrap', 'scarf', 'cashmere',
+    'kani', 'sozni', 'jamawar', 'aari', 'tilla', 'hashida', 'jaldaar',
+    'namda', 'shahtoosh', 'dorukha'
 ]
 
-def get_driver():
-    options = uc.ChromeOptions()
-    options.add_argument('--headless')
+SHAWL_EXCLUDE = [
+    'suit', 'jacket', 'kurta', 'trouser', 'pant', 'dress',
+    'saree', 'sari', 'dupatta', 'pillow', 'cushion', 'blanket',
+    'quilt', 'bed sheet', 'bedsheet', 'bed-cover', 'bed cover',
+    'rug', 'carpet', 'wall hanging', 'cushion cover', 'table',
+    'bag', 'cap', 'hat', 'glove', 'sock'
+]
+
+SHOPIFY_SITES = [
+    {'domain': 'kashmirbox.com',         'name': 'Kashmir Box',       'market': 'India'},
+    {'domain': 'kashmirloom.com',        'name': 'Kashmir Loom',      'market': 'Global'},
+    {'domain': 'purekashmir.com',        'name': 'Pure Kashmir',      'market': 'India'},
+    {'domain': 'kashmirvilla.com',       'name': 'Kashmir Villa',     'market': 'India'},
+    {'domain': 'kashmkari.com',          'name': 'Kashmkari',         'market': 'India'},
+    {'domain': 'shahkaar.com',           'name': 'Shahkaar',          'market': 'Global'},
+    {'domain': 'handwoven.aadyam.co.in', 'name': 'Aadyam Handwoven',  'market': 'India'},
+    {'domain': 'pashtush.in',            'name': 'Pashtush',          'market': 'India'},
+    {'domain': 'kepra.in',               'name': 'Kepra',             'market': 'India'},
+    {'domain': 'phamb.com',              'name': 'Phamb',             'market': 'India'},
+    {'domain': 'ahujasons.com',          'name': 'Ahuja Sons',        'market': 'India'},
+]
+
+
+def is_shawl(title, product_type=''):
+    text = (title + ' ' + (product_type or '')).lower()
+    if any(kw in text for kw in SHAWL_EXCLUDE):
+        return False
+    return any(kw in text for kw in SHAWL_INCLUDE)
+
+
+def scrape_shopify(site):
+    domain = site['domain']
+    name = site['name']
+    market = site['market']
+    products = []
+    page = 1
+
+    print(f"  Scraping {name} (Shopify)...")
+
+    while True:
+        url = f"https://{domain}/products.json?limit=250&page={page}"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json().get('products', [])
+            if not data:
+                break
+
+            for p in data:
+                title = p.get('title', '')
+                product_type = p.get('product_type', '')
+
+                if not is_shawl(title, product_type):
+                    continue
+
+                variant = p['variants'][0] if p.get('variants') else {}
+                price = variant.get('price')
+                original_price = variant.get('compare_at_price')
+
+                products.append({
+                    'brand':          p.get('vendor', name),
+                    'title':          title,
+                    'price':          float(price) if price else None,
+                    'original_price': float(original_price) if original_price else None,
+                    'product_type':   product_type,
+                    'source':         name,
+                    'market':         market,
+                    'scraped_date':   datetime.now().strftime('%Y-%m-%d'),
+                })
+
+            page += 1
+            time.sleep(1.5)
+
+        except Exception as e:
+            print(f"    Error on {name} page {page}: {e}")
+            break
+
+    print(f"    Found {len(products)} shawl products")
+    return products
+
+
+def _get_kcsshop_product(url):
+    """Scrape a single kcsshop.in product page."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        title_el = soup.select_one('h1.product_title, h1.entry-title')
+        if not title_el:
+            return None
+        title = title_el.get_text(strip=True)
+
+        if not is_shawl(title):
+            return None
+
+        # current price (sale or regular)
+        price_el = soup.select_one('.price ins .woocommerce-Price-amount bdi, '
+                                   '.price > .woocommerce-Price-amount bdi, '
+                                   '.price .amount bdi')
+        orig_el = soup.select_one('.price del .woocommerce-Price-amount bdi')
+
+        def parse_price(el):
+            if not el:
+                return None
+            raw = el.get_text(strip=True)
+            cleaned = ''.join(c for c in raw if c.isdigit() or c == '.')
+            return float(cleaned) if cleaned else None
+
+        price = parse_price(price_el)
+        original_price = parse_price(orig_el)
+
+        if price is None:
+            return None
+
+        return {
+            'brand':          'KCS Shop',
+            'title':          title,
+            'price':          price,
+            'original_price': original_price,
+            'product_type':   'Shawl',
+            'source':         'KCS Shop',
+            'market':         'India',
+            'scraped_date':   datetime.now().strftime('%Y-%m-%d'),
+        }
+    except Exception:
+        return None
+
+
+def scrape_kcsshop():
+    """kcsshop.in — WooCommerce sitemap → parallel product page scraping."""
+    print("  Scraping KCS Shop (WooCommerce sitemap)...")
+
+    # collect all product URLs from sitemap
+    product_urls = []
+    for i in range(1, 10):
+        try:
+            r = requests.get(f'https://kcsshop.in/wp-sitemap-posts-product-{i}.xml',
+                             headers=HEADERS, timeout=20)
+            if r.status_code != 200:
+                break
+            soup = BeautifulSoup(r.text, 'xml')
+            urls = [
+                loc.text for loc in soup.find_all('loc')
+                if '/product/' in loc.text
+                and not loc.text.endswith(('.jpg', '.png', '.webp'))
+            ]
+            if not urls:
+                break
+            product_urls.extend(urls)
+        except Exception:
+            break
+
+    # pre-filter by URL slug to skip obvious non-shawl items
+    product_urls = [
+        u for u in product_urls
+        if not any(k in u for k in ['bed-cover', 'blanket', 'rug', 'carpet', 'cushion', 'pillow'])
+    ]
+
+    print(f"    {len(product_urls)} candidate URLs, scraping in parallel...")
+
+    products = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {executor.submit(_get_kcsshop_product, url): url for url in product_urls}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                products.append(result)
+
+    print(f"    Found {len(products)} shawl products")
+    return products
+
+
+def _selenium_driver():
+    options = Options()
+    options.add_argument('--headless=new')
+    options.add_argument('--window-size=1920,1080')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
-    driver = uc.Chrome(options=options)
-    return driver
+    return webdriver.Chrome(options=options)
 
-def scrape_amazon_ae():
-    print("Scraping Amazon.ae...")
-    driver = get_driver()
+
+def scrape_pashmina_com():
+    """pashmina.com — Next.js SPA, Selenium scroll to load all products."""
+    print("  Scraping Pashmina.com (Selenium)...")
+    products = []
+
+    SHAWL_URLS = [
+        'https://www.pashmina.com/pashmina-shawl/',
+        'https://www.pashmina.com/mens-cashmere-shawl/',
+        'https://www.pashmina.com/pashmina-stole/',
+    ]
+
+    driver = _selenium_driver()
+    try:
+        for base_url in SHAWL_URLS:
+            try:
+                driver.get(base_url)
+                time.sleep(8)
+
+                # scroll repeatedly to trigger lazy loading
+                last_count = 0
+                for _ in range(15):
+                    driver.execute_script('window.scrollTo(0, document.body.scrollHeight)')
+                    time.sleep(2)
+                    soup = BeautifulSoup(driver.page_source, 'html.parser')
+                    current_count = len(soup.select('h3 a[href]'))
+                    if current_count == last_count:
+                        break
+                    last_count = current_count
+
+                soup = BeautifulSoup(driver.page_source, 'html.parser')
+                title_links = soup.select('h3 a[href]')
+                price_spans = soup.select('p.float-left span, .price-display span')
+
+                for link, price_el in zip(title_links, price_spans):
+                    try:
+                        title_p = link.find('p')
+                        title = (title_p.get_text(strip=True) if title_p
+                                 else link.get_text(strip=True))
+
+                        if not title or not is_shawl(title):
+                            continue
+
+                        raw_price = price_el.get_text(strip=True)
+                        cleaned = ''.join(c for c in raw_price if c.isdigit() or c == '.')
+                        price = float(cleaned) if cleaned else None
+
+                        if price is None:
+                            continue
+
+                        products.append({
+                            'brand':          'Pashmina.com',
+                            'title':          title,
+                            'price':          price,
+                            'original_price': None,
+                            'product_type':   'Pashmina',
+                            'source':         'Pashmina.com',
+                            'market':         'Global',
+                            'scraped_date':   datetime.now().strftime('%Y-%m-%d'),
+                        })
+                    except Exception:
+                        continue
+
+            except Exception as e:
+                print(f"    Error on {base_url}: {e}")
+    finally:
+        driver.quit()
+
+    print(f"    Found {len(products)} shawl products")
+    return products
+
+
+def scrape_all():
     all_products = []
 
-    for keyword in KEYWORDS:
-        print(f"  Searching: {keyword}")
-        for page in range(1, 4):
-            url = f"https://www.amazon.ae/s?k={keyword.replace(' ', '+')}&page={page}"
-            driver.get(url)
-            time.sleep(4)
+    for site in SHOPIFY_SITES:
+        try:
+            all_products.extend(scrape_shopify(site))
+        except Exception as e:
+            print(f"  Failed {site['name']}: {e}")
 
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            listings = soup.find_all('div', {'data-component-type': 's-search-result'})
+    try:
+        all_products.extend(scrape_kcsshop())
+    except Exception as e:
+        print(f"  Failed KCS Shop: {e}")
 
-            for item in listings:
-                try:
-                    brand = item.find('span', class_='a-size-base-plus')
-                    title = item.find('span', attrs={'class': None})
-                    price = item.find('span', class_='a-price-whole')
+    try:
+        all_products.extend(scrape_pashmina_com())
+    except Exception as e:
+        print(f"  Failed Pashmina.com: {e}")
 
-                    if price:
-                        all_products.append({
-                            'brand': brand.text.strip() if brand else None,
-                            'title': title.text.strip() if title else None,
-                            'price': float(price.text.replace(',', '').replace('.', '').strip()),
-                            'source': 'Amazon.ae',
-                            'market': 'UAE',
-                            'keyword': keyword,
-                            'scraped_date': datetime.now().strftime('%Y-%m-%d')
-                        })
-                except:
-                    continue
-
-            time.sleep(3)
-        print(f"  Total so far: {len(all_products)}")
-
-    driver.quit()
-    df = pd.DataFrame(all_products).drop_duplicates(subset=['title', 'price'])
-    print(f"Amazon.ae unique products: {len(df)}")
+    df = pd.DataFrame(all_products)
+    df = df.dropna(subset=['title', 'price'])
+    df = df.drop_duplicates(subset=['title', 'source'])
+    df = df.reset_index(drop=True)
     return df
 
-def scrape_amazon_in():
-    print("Scraping Amazon.in...")
-    driver = get_driver()
-    all_products = []
-
-    for keyword in KEYWORDS:
-        print(f"  Searching: {keyword}")
-        for page in range(1, 4):
-            url = f"https://www.amazon.in/s?k={keyword.replace(' ', '+')}&page={page}"
-            driver.get(url)
-            time.sleep(4)
-
-            soup = BeautifulSoup(driver.page_source, 'html.parser')
-            listings = soup.find_all('div', {'data-component-type': 's-search-result'})
-
-            for item in listings:
-                try:
-                    brand = item.find('span', class_='a-size-base-plus')
-                    title = item.find('span', attrs={'class': None})
-                    price = item.find('span', class_='a-price-whole')
-
-                    if price:
-                        all_products.append({
-                            'brand': brand.text.strip() if brand else None,
-                            'title': title.text.strip() if title else None,
-                            'price': float(price.text.replace(',', '').replace('.', '').strip()),
-                            'source': 'Amazon.in',
-                            'market': 'India',
-                            'keyword': keyword,
-                            'scraped_date': datetime.now().strftime('%Y-%m-%d')
-                        })
-                except:
-                    continue
-
-            time.sleep(3)
-        print(f"  Total so far: {len(all_products)}")
-
-    driver.quit()
-    df = pd.DataFrame(all_products).drop_duplicates(subset=['title', 'price'])
-    print(f"Amazon.in unique products: {len(df)}")
-    return df
-
-def combine_all_data():
-    print("Combining all data...")
-
-    df_ae = pd.read_csv('data/amazon_ae_auto.csv')
-    df_in = pd.read_csv('data/amazon_in_auto.csv')
-    df_etsy = pd.read_csv('data/etsy_clean.csv')
-
-    df_etsy['source'] = 'Etsy'
-    df_etsy['market'] = 'Global'
-    df_etsy['keyword'] = 'kashmiri pashmina shawl'
-    df_etsy['scraped_date'] = datetime.now().strftime('%Y-%m-%d')
-    df_etsy = df_etsy.rename(columns={'sale_price': 'price', 'shop': 'brand'})
-
-    cols = ['brand', 'title', 'price', 'source', 'market', 'keyword', 'scraped_date']
-
-    df_master = pd.concat([
-        df_ae[cols],
-        df_in[cols],
-        df_etsy[cols]
-    ], ignore_index=True)
-
-    df_master.to_csv('data/master_dataset.csv', index=False)
-    print(f"Master dataset updated: {len(df_master)} total products")
-    print(df_master['source'].value_counts())
-    return df_master
 
 if __name__ == "__main__":
-    df_amazon_ae = scrape_amazon_ae()
-    df_amazon_ae.to_csv('data/amazon_ae_auto.csv', index=False)
-    print("Amazon.ae saved!")
+    print(f"Scraping started: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
 
-    df_amazon_in = scrape_amazon_in()
-    df_amazon_in.to_csv('data/amazon_in_auto.csv', index=False)
-    print("Amazon.in saved!")
+    df = scrape_all()
 
-    combine_all_data()
+    print(f"\nTotal shawl products scraped: {len(df)}")
+    print(df['source'].value_counts().to_string())
 
-    import subprocess
-    subprocess.run(['git', 'add', '.'], cwd='/home/syedtaha/shawl-business-intelligence')
-    subprocess.run(['git', 'commit', '-m', f'Auto update: {datetime.now().strftime("%Y-%m-%d")}'],
-                   cwd='/home/syedtaha/shawl-business-intelligence')
-    subprocess.run(['git', 'push'], cwd='/home/syedtaha/shawl-business-intelligence')
-    print("GitHub updated!")
+    df.to_csv('data/competitor_products.csv', index=False)
+    print("\nSaved: data/competitor_products.csv")
+
+    cols = ['brand', 'title', 'price', 'source', 'market', 'scraped_date']
+    master = df[cols].copy()
+    master.to_csv('data/master_dataset.csv', index=False)
+    print(f"Master dataset updated: {len(master)} products")
+    print(f"\nScraping complete: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
